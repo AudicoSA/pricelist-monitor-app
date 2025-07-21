@@ -85,16 +85,16 @@ export default function PricelistTable({
 
   const totalPages = Math.ceil(pagination.total / pagination.limit);
 
-  const getCategoryName = (categoryId: number) => {
-    const categories = {
-      1: 'Communication',
-      2: 'AV Equipment', 
-      3: 'Audio Equipment',
-      4: 'Video Equipment',
-      5: 'Networking'
-    };
-    return categories[categoryId] || 'Unknown';
+ const getCategoryName = (categoryId: number) => {
+  const categories: { [key: string]: string } = {  // ← Changed to string index
+    '1': 'Communication Devices',
+    '2': 'AV Equipment', 
+    '3': 'Audio Equipment',
+    '4': 'Cables & Accessories',
+    '5': 'Networking'
   };
+  return categories[categoryId.toString()] || 'Unknown';  // ← Convert to string
+};
 
   const formatPrice = (price: number, currency: string) => {
     return new Intl.NumberFormat('en-ZA', {
