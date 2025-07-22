@@ -24,6 +24,7 @@
     "clsx": "^2.0.0",
     "formidable": "^3.5.4",
     "lucide-react": "^0.294.0",
+    "multer": "^2.0.2",
     "next": "^14.0.0",
     "openai": "^4.104.0",
     "react": "^18.2.0",
@@ -34,8 +35,11 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@tailwindcss/forms": "^0.5.10",
     "@types/formidable": "^3.4.5",
+    "@types/multer": "^2.0.0",
     "@types/node": "^20.8.10",
+    "@types/pdf-parse": "^1.1.5",
     "@types/react": "^18.2.33",
     "@types/react-dom": "^18.2.14",
     "@typescript-eslint/eslint-plugin": "^6.9.1",
@@ -43,6 +47,7 @@
     "autoprefixer": "^10.4.16",
     "eslint": "^8.52.0",
     "eslint-config-next": "^14.0.0",
+    "pdf-parse": "^1.1.1",
     "postcss": "^8.4.31",
     "prettier": "^3.0.3",
     "prettier-plugin-tailwindcss": "^0.5.7"
