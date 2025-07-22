@@ -1,100 +1,444 @@
-// components/FileUpload.tsx
-import React, { useState, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
+// Enhanced Upload Form with Intelligent Price Processing
+import React, { useState, useRef } from 'react';
+import { Upload, FileSpreadsheet, Calculator, TrendingUp, AlertCircle, CheckCircle } from 'lucide-react';
 
-interface FileUploadProps {
-  onUploadComplete: (result: any) => void;
+interface UploadResult {
+  success: boolean;
+  message: string;
+  data?: {
+    total_found: number;
+    saved_count: number;
+    failed_count: number;
+    price_type: string;
+    markup_percentage: number;
+    processing_time: number;
+    products: any[];
+    errors: string[];
+  };
+  error?: string;
 }
 
-export default function FileUpload({ onUploadComplete }: FileUploadProps) {
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+interface PriceTypeOption {
+  value: string;
+  label: string;
+  description: string;
+  example: string;
+}
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    const file = acceptedFiles[0];
-    if (!file) return;
+export const EnhancedUploadForm: React.FC = () => {
+  const [file, setFile] = useState(null);
+  const [priceType, setPriceType] = useState('');
+  const [markupPercentage, setMarkupPercentage] = useState(30);
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const priceTypeOptions: PriceTypeOption[] = [
+    {
+      value: 'retail_incl_vat',
+      label: 'Retail Price (including VAT)',
+      description: 'Final selling price with 15% VAT already included',
+      example: 'R115.00 (includes VAT)'
+    },
+    {
+      value: 'retail_excl_vat',
+      label: 'Retail Price (excluding VAT)', 
+      description: 'Selling price before adding 15% VAT',
+      example: 'R100.00 + VAT = R115.00'
+    },
+    {
+      value: 'cost_excl_vat',
+      label: 'Cost Price (excluding VAT)',
+      description: 'Your cost price before VAT and markup',
+      example: 'R70.00 → markup → retail'
+    },
+    {
+      value: 'cost_incl_vat', 
+      label: 'Cost Price (including VAT)',
+      description: 'Your cost with VAT, before applying markup',
+      example: 'R80.50 → markup → retail'
+    }
+  ];
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    
+    const droppedFiles = Array.from(e.dataTransfer.files);
+    const excelFile = droppedFiles.find(f => 
+      f.name.endsWith('.xlsx') || 
+      f.name.endsWith('.xls') || 
+      f.name.endsWith('.xlsm')
+    );
+    
+    if (excelFile) {
+      setFile(excelFile);
+    } else {
+      alert('Please drop an Excel file (.xlsx, .xls, .xlsm)');
+    }
+  };
+
+  const handleFileSelect = (event: React.ChangeEvent) => {
+    const selectedFile = event.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+    }
+  };
+
+  const calculatePricePreview = (inputPrice: number = 100) => {
+    if (!priceType || markupPercentage <= 0) return null;
+
+    const markup = markupPercentage / 100;
+    const VAT_RATE = 0.15;
+    const markupMultiplier = 1 + markup;
+    
+    let preview: any = {};
+    
+    switch (priceType) {
+      case 'retail_incl_vat':
+        preview.retail_incl_vat = inputPrice;
+        preview.retail_excl_vat = inputPrice / (1 + VAT_RATE);
+        preview.cost_incl_vat = inputPrice / markupMultiplier;
+        preview.cost_excl_vat = preview.cost_incl_vat / (1 + VAT_RATE);
+        break;
+      case 'retail_excl_vat':
+        preview.retail_excl_vat = inputPrice;
+        preview.retail_incl_vat = inputPrice * (1 + VAT_RATE);
+        preview.cost_excl_vat = inputPrice / markupMultiplier;
+        preview.cost_incl_vat = preview.cost_excl_vat * (1 + VAT_RATE);
+        break;
+      case 'cost_excl_vat':
+        preview.cost_excl_vat = inputPrice;
+        preview.cost_incl_vat = inputPrice * (1 + VAT_RATE);
+        preview.retail_excl_vat = inputPrice * markupMultiplier;
+        preview.retail_incl_vat = preview.retail_excl_vat * (1 + VAT_RATE);
+        break;
+      case 'cost_incl_vat':
+        preview.cost_incl_vat = inputPrice;
+        preview.cost_excl_vat = inputPrice / (1 + VAT_RATE);
+        preview.retail_incl_vat = inputPrice * markupMultiplier;
+        preview.retail_excl_vat = preview.retail_incl_vat / (1 + VAT_RATE);
+        break;
+    }
+
+    // Round all values
+    Object.keys(preview).forEach(key => {
+      preview[key] = Math.round(preview[key] * 100) / 100;
+    });
+
+    return preview;
+  };
+
+  const handleUpload = async () => {
+    if (!file) {
+      alert('Please select an Excel file to upload');
+      return;
+    }
 
     setUploading(true);
-    setError(null);
-
-    const formData = new FormData();
-    formData.append('file', file);
+    setResult(null);
 
     try {
-      const response = await fetch('/api/upload/pricelist', {
+      console.log('🚀 Starting upload:', file.name);
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('priceType', priceType);
+      formData.append('markupPercentage', markupPercentage.toString());
+
+      const response = await fetch('/api/upload/enhanced-pricelist', {
         method: 'POST',
         body: formData,
       });
 
-      const result = await response.json();
+      const data = await response.json();
+      console.log('📊 Upload result:', data);
+      
+      setResult(data);
 
-      if (result.success) {
-        onUploadComplete(result);
-      } else {
-        setError(result.message || 'Upload failed');
+      // Auto-redirect on success after showing results
+      if (data.success && data.data?.saved_count > 0) {
+        setTimeout(() => {
+          // You can redirect to dashboard or refresh the page
+          window.location.href = '/dashboard?uploaded=true';
+        }, 3000);
       }
-    } catch (err) {
-      setError('Upload failed. Please try again.');
+
+    } catch (error) {
+      console.error('💥 Upload error:', error);
+      setResult({
+        success: false,
+        message: `Upload failed: ${error.message}`,
+        error: error.message
+      });
     } finally {
       setUploading(false);
     }
-  }, [onUploadComplete]);
+  };
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-      'application/vnd.ms-excel': ['.xls'],
-      'application/pdf': ['.pdf']
-    },
-    multiple: false
-  });
+  const pricePreview = calculatePricePreview();
 
   return (
-    <div className="space-y-4">
-      <div
-        {...getRootProps()}
-        className={`upload-area cursor-pointer ${isDragActive ? 'dragover' : ''}`}
-      >
-        <input {...getInputProps()} />
-        {uploading ? (
-          <div className="flex flex-col items-center">
-            <div className="loading-spinner mb-4"></div>
-            <p className="text-sm text-gray-600">Processing file...</p>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center">
-            <svg
-              className="w-12 h-12 text-gray-400 mb-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-              />
-            </svg>
-            <p className="text-lg font-medium text-gray-900 mb-2">
-              {isDragActive ? 'Drop your pricelist here' : 'Upload pricelist file'}
-            </p>
-            <p className="text-sm text-gray-600">
-              Supports Excel (.xlsx, .xls) and PDF files
-            </p>
-            <p className="text-xs text-gray-500 mt-2">
-              Maximum file size: 50MB
-            </p>
-          </div>
-        )}
-      </div>
+    
+      {/* Header */}
+      
+        
+          
+        
+        
+          Enhanced AI Pricelist Processor
+        
+        
+          Upload Excel pricelists with intelligent price type detection and automatic markup calculations
+        
+      
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-md p-4">
-          <div className="text-red-800 text-sm">{error}</div>
-        </div>
-      )}
-    </div>
+      
+        {/* Left Column - Upload & Settings */}
+        
+          {/* File Upload */}
+          
+            
+              
+              Upload Excel File
+            
+            
+             { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+            >
+              
+              
+              {file ? (
+                
+                  
+                  {file.name}
+                  
+                    {Math.round(file.size / 1024)} KB
+                  
+                   fileInputRef.current?.click()}
+                    className="mt-2 text-blue-600 hover:text-blue-700 text-sm underline"
+                  >
+                    Choose different file
+                  
+                
+              ) : (
+                
+                  
+                  Drop Excel file here
+                  or
+                   fileInputRef.current?.click()}
+                    className="mt-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
+                  >
+                    Choose File
+                  
+                  
+                    Supports .xlsx, .xls, .xlsm files up to 50MB
+                  
+                
+              )}
+            
+          
+
+          {/* Price Type Selection */}
+          
+            
+              
+              Price Type in Your Excel File
+            
+            
+            
+              
+                
+                  
+                  
+                    Let AI Auto-Detect
+                    
+                      Leave blank to let AI analyze your Excel file and detect the price type automatically
+                    
+                  
+                
+              
+
+              {priceTypeOptions.map((option) => (
+                
+                   setPriceType(e.target.value)}
+                    className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                  />
+                  
+                    {option.label}
+                    {option.description}
+                    
+                      {option.example}
+                    
+                  
+                
+              ))}
+            
+          
+
+          {/* Markup Percentage */}
+          
+            
+              
+              Markup Percentage
+            
+            
+            
+              
+                 setMarkupPercentage(parseFloat(e.target.value) || 0)}
+                  min="0"
+                  max="1000"
+                  step="0.5"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              
+              %
+            
+            
+            
+              Common markups: 25% (high-end), 30% (standard), 35% (accessories)
+            
+          
+        
+
+        {/* Right Column - Preview & Upload */}
+        
+          {/* Price Calculation Preview */}
+          {pricePreview && (
+            
+              Price Calculation Preview
+              
+                Example: If your Excel contains R100.00 as {priceTypeOptions.find(o => o.value === priceType)?.label}
+              
+              
+              
+                
+                  Cost (excl VAT):
+                  R{pricePreview.cost_excl_vat.toFixed(2)}
+                
+                
+                  Cost (incl VAT):
+                  R{pricePreview.cost_incl_vat.toFixed(2)}
+                
+                
+                  Retail (excl VAT):
+                  R{pricePreview.retail_excl_vat.toFixed(2)}
+                
+                
+                  Retail (incl VAT):
+                  R{pricePreview.retail_incl_vat.toFixed(2)}
+                
+              
+              
+              
+                Calculation Logic: {markupPercentage}% markup • 15% VAT rate
+              
+            
+          )}
+
+          {/* Upload Button */}
+          
+            
+              {uploading ? (
+                
+                  
+                  Processing with AI...
+                
+              ) : (
+                
+                  
+                  Upload & Process Pricelist
+                
+              )}
+            
+          
+
+          {/* Results */}
+          {result && (
+            
+              
+                {result.success ? (
+                  
+                ) : (
+                  
+                )}
+                
+                
+                  
+                    {result.success ? '✅ Processing Successful' : '❌ Processing Failed'}
+                  
+                  
+                  
+                    {result.message}
+                  
+                  
+                  {result.data && (
+                    
+                      
+                        
+                          Products found:
+                          {result.data.total_found}
+                        
+                        
+                          Products saved:
+                          {result.data.saved_count}
+                        
+                        
+                          Price type:
+                          {result.data.price_type.replace('_', ' ')}
+                        
+                        
+                          Markup applied:
+                          {result.data.markup_percentage}%
+                        
+                      
+                      
+                      
+                        Processing completed in {result.data.processing_time}ms
+                      
+                      
+                      {result.data.products && result.data.products.length > 0 && (
+                        
+                          Sample processed products:
+                          
+                            {result.data.products.slice(0, 3).map((product: any, index: number) => (
+                              
+                                {product.name}
+                                R{product.retail_excl_vat}
+                                ({product.supplier})
+                              
+                            ))}
+                          
+                        
+                      )}
+                      
+                      {result.data.errors && result.data.errors.length > 0 && (
+                        
+                          Errors encountered:
+                          
+                            {result.data.errors.slice(0, 3).map((error: string, index: number) => (
+                              
+                                {error}
+                              
+                            ))}
+                          
+                        
+                      )}
+                    
+                  )}
+                  
+                  {result.success && (
+                    
+                      Redirecting to dashboard in 3 seconds...
+                    
+                  )}
+                
+              
+            
+          )}
+        
+      
+    
   );
-}
+};
