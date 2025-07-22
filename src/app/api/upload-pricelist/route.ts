@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import * as XLSX from 'xlsx';
-import * as pdf from 'pdf-parse';
-import formidable from 'formidable';
+import pdf from 'pdf-parse';
 import { OpenAI } from 'openai';
 import { Anthropic } from '@anthropic-ai/sdk';
 
+// Use your existing environment variable names
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!
 );
 
 const openai = new OpenAI({
@@ -30,10 +30,12 @@ interface PricelistProduct {
   price_type: 'retail_incl_vat' | 'retail_excl_vat' | 'cost_incl_vat' | 'cost_excl_vat';
   original_price: number;
   currency: string;
-  markup_percentage?: number;
-  cost_price_excl_vat?: number;
-  cost_price_incl_vat?: number;
-  calculated_retail_price?: number;
+  markup_percentage: number;
+  cost_price_excl_vat: number;
+  cost_price_incl_vat: number;
+  calculated_retail_price: number;
+  created_at: string;
+  updated_at: string;
 }
 
 interface UploadConfig {
@@ -65,14 +67,14 @@ export async function POST(request: NextRequest) {
       // Process PDF using AI
       extractedData = await processPDFPricelist(buffer, config);
     } else if (['xlsx', 'xls'].includes(fileExtension || '')) {
-      // Process Excel file
+      // Process Excel file with improved Nology parsing
       extractedData = await processExcelPricelist(buffer, config);
     } else {
       return NextResponse.json({ error: 'Unsupported file format. Please upload PDF, XLSX, or XLS files.' }, { status: 400 });
     }
 
-    // Process and enhance data with AI pricing logic
-    const processedProducts = await processProductsWithAI(extractedData, config);
+    // Process and enhance data with COMPLETE cost calculations (like your existing perfect data)
+    const processedProducts = await processProductsWithCompleteCalculations(extractedData, config, file.name);
 
     // Insert into Supabase
     const { data, error } = await supabase
@@ -111,7 +113,7 @@ async function processPDFPricelist(buffer: Buffer, config: UploadConfig): Promis
     {
       "name": "product name",
       "price": number (price value only),
-      "description": "product description",
+      "description": "product description", 
       "model_number": "model/SKU if available",
       "category": "product category"
     }
@@ -135,13 +137,18 @@ async function processPDFPricelist(buffer: Buffer, config: UploadConfig): Promis
       });
       aiResponse = response.choices[0]?.message?.content || '[]';
     } else {
-      const response = await anthropic.messages.create({
-        model: 'claude-3-sonnet-20240229',
-        max_tokens: 4000,
-        messages: [{ role: 'user', content: prompt }],
-      });
-      aiResponse = response.content[0].type === 'text' ? response.content[0].text : '[]';
-    }
+    const response = await anthropic.messages.create({
+  model: 'claude-3-sonnet-20240229',
+  max_tokens: 4000,
+  messages: [{ role: 'user', content: prompt }],
+    });
+    // Handle the response correctly
+    const messageContent = response.content[0];
+    if (messageContent.type === 'text') {
+     aiResponse = messageContent.text;
+    } else {
+    aiResponse = '[]';
+    }  
 
     // Parse AI response
     const jsonMatch = aiResponse.match(/\[[\s\S]*\]/);
@@ -160,17 +167,121 @@ async function processPDFPricelist(buffer: Buffer, config: UploadConfig): Promis
 async function processExcelPricelist(buffer: Buffer, config: UploadConfig): Promise<any[]> {
   try {
     const workbook = XLSX.read(buffer, { type: 'buffer' });
-    const firstSheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[firstSheetName];
-    const data = XLSX.utils.sheet_to_json(worksheet);
-
-    return data.map((row: any) => ({
-      name: row['Product Name'] || row['Name'] || row['Product'] || '',
-      price: parseFloat(row['Price'] || row['Cost'] || row['Amount'] || '0'),
-      description: row['Description'] || row['Details'] || '',
-      model_number: row['Model'] || row['SKU'] || row['Code'] || '',
-      category: row['Category'] || row['Type'] || 'General'
-    }));
+    let allProducts = [];
+    
+    // Get all potential vendor sheets (excluding system sheets)
+    const vendorSheets = workbook.SheetNames.filter(name => 
+      !['PRICING', 'INDEX', 'SUMMARY', 'INFO', 'Categories', 'EOL Products', 'Promotions', 'New Products', 'Warehouse Clearance', 'Delivery'].includes(name)
+    );
+    
+    console.log(`Processing ${vendorSheets.length} vendor sheets:`, vendorSheets);
+    
+    for (const sheetName of vendorSheets.slice(0, 15)) { // Process first 15 vendor sheets
+      try {
+        const worksheet = workbook.Sheets[sheetName];
+        
+        // Convert to JSON with no header to see raw structure
+        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        
+        if (rawData.length < 4) continue; // Need at least 4 rows for Nology structure
+        
+        // For Nology files, find the row that contains SKU, DESCRIPTION, PRICE
+        // Analysis shows headers are typically in row 3 (index 3)
+        let headerRowIndex = -1;
+        for (let i = 0; i < Math.min(6, rawData.length); i++) {
+          const row = rawData[i];
+          if (Array.isArray(row) && row.some(cell => 
+            cell && typeof cell === 'string' && 
+            (cell.toUpperCase().includes('SKU') || 
+             (cell.toUpperCase().includes('DESCRIPTION') && 
+              rawData[i].some(c => c && c.toString().toUpperCase().includes('PRICE'))))
+          )) {
+            headerRowIndex = i;
+            break;
+          }
+        }
+        
+        if (headerRowIndex === -1) {
+          console.warn(`No header row found in sheet ${sheetName}`);
+          continue;
+        }
+        
+        const headers = rawData[headerRowIndex];
+        const dataRows = rawData.slice(headerRowIndex + 1);
+        
+        console.log(`Sheet ${sheetName}: Found headers at row ${headerRowIndex}:`, headers);
+        
+        // Find column indices with flexible matching
+        const skuIdx = headers.findIndex(h => h && 
+          (h.toString().toUpperCase().includes('SKU') || 
+           h.toString().toUpperCase().includes('CODE')));
+        
+        const descIdx = headers.findIndex(h => h && 
+          h.toString().toUpperCase().includes('DESCRIPTION'));
+        
+        const priceIdx = headers.findIndex(h => h && 
+          h.toString().toUpperCase().includes('PRICE') &&
+          !h.toString().toUpperCase().includes('SUGGESTED') &&
+          !h.toString().toUpperCase().includes('ADVERTISING') &&
+          !h.toString().toUpperCase().includes('MSRP'));
+        
+        if (skuIdx === -1 || descIdx === -1 || priceIdx === -1) {
+          console.warn(`Missing required columns in sheet ${sheetName}: SKU(${skuIdx}), DESC(${descIdx}), PRICE(${priceIdx})`);
+          continue;
+        }
+        
+        console.log(`Processing ${sheetName}: SKU col ${skuIdx}, DESC col ${descIdx}, PRICE col ${priceIdx}`);
+        
+        // Process each row
+        let productCount = 0;
+        for (const row of dataRows) {
+          if (!Array.isArray(row)) continue;
+          
+          const sku = row[skuIdx];
+          const description = row[descIdx];
+          const price = row[priceIdx];
+          
+          // Skip invalid rows - be very specific about filtering
+          if (!sku || !description || !price || 
+              typeof price !== 'number' || price <= 0 ||
+              // Skip category headers
+              (typeof description === 'string' && (
+                description.toUpperCase().includes('CATEGORY') ||
+                description.toUpperCase() === description || // ALL CAPS likely a category
+                description.length < 5 // Too short to be a real product description
+              )) ||
+              // Skip if SKU looks like a category
+              (typeof sku === 'string' && (
+                sku.toUpperCase().includes('CATEGORY') ||
+                sku.length < 2
+              ))) {
+            continue;
+          }
+          
+          allProducts.push({
+            name: `${sku} - ${description}`.substring(0, 100),
+            price: parseFloat(price),
+            description: description.toString(),
+            model_number: sku.toString(),
+            category: sheetName,
+            vendor: sheetName
+          });
+          productCount++;
+          
+          // Limit products per sheet to avoid overwhelming
+          if (productCount >= 50) break;
+        }
+        
+        console.log(`Extracted ${productCount} products from ${sheetName}`);
+        
+      } catch (error) {
+        console.warn(`Error processing sheet ${sheetName}:`, error);
+        continue;
+      }
+    }
+    
+    console.log(`Total products extracted from Excel: ${allProducts.length}`);
+    return allProducts;
 
   } catch (error) {
     console.error('Excel processing error:', error);
@@ -178,62 +289,73 @@ async function processExcelPricelist(buffer: Buffer, config: UploadConfig): Prom
   }
 }
 
-async function processProductsWithAI(products: any[], config: UploadConfig): Promise<PricelistProduct[]> {
+async function processProductsWithCompleteCalculations(products: any[], config: UploadConfig, fileName: string): Promise<PricelistProduct[]> {
   return products.map((product, index) => {
     const originalPrice = product.price;
-    let calculatedPrice = originalPrice;
+    let finalRetailPrice = originalPrice;
     let costExclVat = 0;
     let costInclVat = 0;
-    let retailPrice = 0;
+    let calculatedRetailPrice = 0;
     
-    // Apply your AI pricing logic based on price_type
+    // COMPLETE pricing logic with all cost calculations (matches your existing perfect data)
     switch (config.price_type) {
       case 'retail_incl_vat':
-        // If retail includes VAT, reverse calculate cost
+        // Price already includes VAT and is retail price
+        finalRetailPrice = originalPrice;
+        calculatedRetailPrice = originalPrice;
+        // Reverse calculate cost by removing markup
         costInclVat = originalPrice / (1 + config.markup_percentage / 100);
         costExclVat = costInclVat / 1.15;
-        retailPrice = originalPrice;
         break;
         
       case 'retail_excl_vat':
-        // If retail excludes VAT, add VAT for final retail
+        // Price excludes VAT but is retail price - THIS MATCHES YOUR EXISTING NOLOGY DATA
+        finalRetailPrice = originalPrice * 1.15; // Add VAT for final retail
+        calculatedRetailPrice = finalRetailPrice;
+        // Reverse calculate cost by removing markup from original price (matches your 30% data)
         costExclVat = originalPrice / (1 + config.markup_percentage / 100);
         costInclVat = costExclVat * 1.15;
-        retailPrice = originalPrice * 1.15;
-        break;
-        
-      case 'cost_excl_vat':
-        // If cost excludes VAT, calculate retail with markup
-        costExclVat = originalPrice;
-        costInclVat = originalPrice * 1.15;
-        retailPrice = costInclVat * (1 + config.markup_percentage / 100);
-        calculatedPrice = retailPrice;
         break;
         
       case 'cost_incl_vat':
-        // If cost includes VAT, calculate retail with markup
+        // Price includes VAT but is cost price
         costInclVat = originalPrice;
         costExclVat = originalPrice / 1.15;
-        retailPrice = originalPrice * (1 + config.markup_percentage / 100);
-        calculatedPrice = retailPrice;
+        finalRetailPrice = originalPrice * (1 + config.markup_percentage / 100);
+        calculatedRetailPrice = finalRetailPrice;
         break;
+        
+      case 'cost_excl_vat':
+        // Price excludes VAT and is cost price
+        costExclVat = originalPrice;
+        costInclVat = originalPrice * 1.15;
+        calculatedRetailPrice = costInclVat * (1 + config.markup_percentage / 100);
+        finalRetailPrice = calculatedRetailPrice;
+        break;
+        
+      default:
+        // Default to retail excluding VAT (matches your existing Nology data)
+        finalRetailPrice = originalPrice * 1.15;
+        calculatedRetailPrice = finalRetailPrice;
+        costExclVat = originalPrice / (1 + config.markup_percentage / 100);
+        costInclVat = costExclVat * 1.15;
     }
 
     return {
       product_id: `PID_${Math.random().toString(36).substr(2, 12).toUpperCase()}`,
       name: product.name || `Product ${index + 1}`,
       category_id: determineCategoryId(product.category || 'General'),
-      price: Math.round(calculatedPrice * 100) / 100,
+      price: Math.round(finalRetailPrice * 100) / 100,
       description: product.description || '',
       supplier: config.supplier_name,
-      source_file: `${config.supplier_name}_${new Date().toISOString().split('T')[0]}`,
+      source_file: fileName,
       price_type: config.price_type,
       original_price: originalPrice,
       currency: 'ZAR',
       markup_percentage: config.markup_percentage,
       cost_price_excl_vat: Math.round(costExclVat * 100) / 100,
       cost_price_incl_vat: Math.round(costInclVat * 100) / 100,
-      calculated_retail_price: Math.round(retailPrice * 100) / 100,
+      calculated_retail_price: Math.round(calculatedRetailPrice * 100) / 100,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -242,15 +364,19 @@ async function processProductsWithAI(products: any[], config: UploadConfig): Pro
 
 function determineCategoryId(category: string): number {
   const categoryMap: { [key: string]: number } = {
-    'headphones': 3,
-    'speakers': 4,
-    'audio': 4,
+    'yealink': 1,
+    'mikrotik': 1, 
     'ip phone': 1,
     'phone': 1,
     'accessories': 1,
     'av equipment': 2,
+    'atlona': 2,
     'hdmi': 2,
     'transmitter': 2,
+    'headphones': 3,
+    'audio': 3,
+    'speakers': 4,
+    'denon': 4,
     'general': 5
   };
   
