@@ -147,7 +147,7 @@ export const EnhancedUploadForm: React.FC = () => {
       formData.append('priceType', priceType);
       formData.append('markupPercentage', markupPercentage.toString());
 
-      const response = await fetch('/api/upload/enhanced-pricelist', {
+      const response = await fetch('/api/upload/pricelist', {
         method: 'POST',
         body: formData,
       });
