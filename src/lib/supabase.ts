@@ -57,7 +57,7 @@ export const saveToSupabase = async (products: any[]) => {
     console.error('Error saving to Supabase:', error);
     return { 
       success: false, 
-      message: `Error: ${error.message || 'Unknown error'}`,
+      message: `Error: ${error instanceof Error ? error.message : String(error)}`,
       count: 0
     };
   }
@@ -102,7 +102,7 @@ export const createPricelistTable = async () => {
     console.error('Error creating table:', error);
     return { 
       success: false, 
-      message: `Error creating table: ${error.message || 'Unknown error'}`
+      message: `Error creating table: ${error instanceof Error ? error.message : String(error)}
     };
   }
 };

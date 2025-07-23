@@ -15,7 +15,7 @@
     "vercel-build": "next build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.8.1",
+    "@anthropic-ai/sdk": "^0.57.0",
     "@headlessui/react": "^1.7.17",
     "@heroicons/react": "^2.0.18",
     "@supabase/auth-helpers-nextjs": "^0.8.7",
